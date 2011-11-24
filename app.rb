@@ -10,6 +10,8 @@ DB.create_table :assets do
   String      :type
   
   String      :description, text: true
+  
+  FalseClass  :complete
 end
 
 class Asset < Sequel::Model
@@ -88,9 +90,13 @@ end
 put '/:id/media' do
   # halt 400 if rand <= 0.5
   
-  halt 400 unless content_range[:first] == File.size?(@asset.media) ? File.size(@asset.media) : 0
+  halt 400 if @asset.complete || content_range[:first] != 
+    (File.exist?(@asset.media) ? File.size(@asset.media) : 0)
   
   @asset.append(request.body.read)
+  
+  @asset.update(complete: true) if content_range[:last] == content_range[:total]
+  
   headers 'Location' => url("/#{@asset.id}")
   204
 end

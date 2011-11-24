@@ -2,4 +2,9 @@ article
   header
     h1 = asset.name
   p = asset.description
-  a href=url("/#{asset.id}/media") Media
+  - if asset.complete
+    p
+      a href=url("/#{asset.id}/media") Media
+  - else
+    p
+      .drop.update drop the same file to resume uploading&hellip;

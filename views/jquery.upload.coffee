@@ -2,7 +2,7 @@ $ = jQuery
 
 $.uploader = class Uploader
 
-  constructor: (@url, @file) ->
+  constructor: (@file) ->
     @slice = @file.webkitSlice || @file.mozSlice || @file.slice
   
   bufferSize: 1024 * 1024
@@ -17,7 +17,7 @@ $.uploader = class Uploader
   blob: ->
     @slice.call(@file, @position, @endPosition())
     
-  create: ->
+  create: (url) ->
     data = new FormData($('form')[0])
     if @slice
       data.append('file[filename]', @file.name)
@@ -26,7 +26,7 @@ $.uploader = class Uploader
       data.append('file', @file)
     
     $.ajax(
-      url: @url
+      url: url
       type: 'POST'
       data: data
       processData: false
@@ -54,6 +54,8 @@ $.uploader = class Uploader
       cache: false
       beforeSend: (xhr, settings) =>
         xhr.setRequestHeader('Content-Range', @contentRange())
+        xhr.setRequestHeader('Content-Type', @file.type)
+        xhr.setRequestHeader('X-File-Name', @file.name)
       success: (data, status, xhr) =>
         @position = @endPosition()
         if @position < @file.size - 1
