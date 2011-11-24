@@ -16,15 +16,14 @@ $.uploader = class Uploader
   
   blob: ->
     @slice.call(@file, @position, @endPosition())
-      
-  stream: ->
-    @create()
     
   create: ->
-    data = new FormData()
-    data.append('name', @file.name)
-    data.append('size', @file.size)
-    data.append('type', @file.type)
+    data = new FormData($('form')[0])
+    if @slice
+      data.append('file[filename]', @file.name)
+      data.append('file[type]', @file.type)
+    else
+      data.append('file', @file)
     
     $.ajax(
       url: @url
@@ -34,8 +33,16 @@ $.uploader = class Uploader
       contentType: false
       cache: false
       success: (data, status, xhr) =>
-        @update(xhr.getResponseHeader('Location'))    
+        if @slice
+          @update(xhr.getResponseHeader('Location') + '/media')
+        else
+          window.location.href = xhr.getResponseHeader('Location')
     )
+    
+  head: (url) ->
+    $.ajax
+      url: url
+      type: 'HEAD'
     
   update: (url) ->
     $.ajax
@@ -46,16 +53,18 @@ $.uploader = class Uploader
       contentType: @file.type
       cache: false
       beforeSend: (xhr, settings) =>
-        xhr.setRequestHeader('X-File-Name', @file.name)
-        xhr.setRequestHeader('X-File-Size', settings.data.size)
         xhr.setRequestHeader('Content-Range', @contentRange())
-      statusCode:
-        204: (data, status, xhr) ->
-          console.log(xhr.getResponseHeader('Location'))
-        308: (xhr) =>
-          @position = parseInt(xhr.getResponseHeader('Range').split('-')[1])
-          if @position < @file.size
-            @update(url)
-        400: (xhr) =>
-          
-        
+      success: (data, status, xhr) =>
+        @position = @endPosition()
+        if @position < @file.size - 1
+          @update(url)
+        else
+          window.location.href = xhr.getResponseHeader('Location')
+      error: (xhr) =>
+        @head(url)
+          .done((data, status, xhr) =>
+            @position = parseInt(xhr.getResponseHeader('Content-Length')) || 0
+            if @position < @file.size
+              @update(url)
+          )
+          .fail(@head(url))

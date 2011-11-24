@@ -5,67 +5,33 @@ DB = Sequel.sqlite
 
 DB.create_table :assets do
   primary_key :id
+  
   String      :name
   String      :type
-  Integer     :size
-end
-
-DB.create_table :uploads do
-  primary_key :id
-  foreign_key :asset_id, :assets
   
-  String  :name
-  Integer :position, default: 0
-  Integer :total, default: 0
+  String      :description, text: true
 end
 
 class Asset < Sequel::Model
-  one_to_many :uploads
   
   def after_create
-    FileUtils.mkdir_p(dir)
+    FileUtils.rm media, force: true
   end
   
-  def dir
-    File.expand_path(File.join('public', 'assets', id.to_s))
+  def media
+    File.join('media', id.to_s + File.extname(name))
   end
   
-  def path
-    File.expand_path(File.join(dir, name))
-  end
-end
-
-class Upload < Sequel::Model
-  many_to_one :asset
-  
-  def after_create
-    FileUtils.mkdir_p(dir)
-  end
-  
-  def before_destroy
-    FileUtils.mv(path, asset.path)
-    FileUtils.rmdir(dir)
-  end
-  
-  def dir
-    File.expand_path(File.join('public', 'uploads', id.to_s))
-  end
-  
-  def path
-    File.join(dir, name)
-  end
-  
-  def write_range(data)
-    File.lock(path) do |f|
-      f.seek(position, IO::SEEK_SET)
+  def append(data)
+    File.extend(Lockable).lock(media) do |f|
       f.write data
     end
   end
 end
 
 module Lockable
-  def lock(filename, &block)
-    File.open(filename, File::RDWR|File::CREAT) do |f|
+  def lock(filename, mode='a', &block)
+    File.open(filename, mode) do |f|
       begin
         f.flock File::LOCK_EX
         yield f
@@ -75,46 +41,13 @@ module Lockable
     end
   end
 end
-File.extend(Lockable)
 
 helpers do
   def content_range
     range, total = env['HTTP_CONTENT_RANGE'].split.last.split('/')
     first, last = range.split('-')
-    {first: first, last: last, total: total}
+    {first: first.to_i, last: last.to_i, total: total.to_i}
   end
-end
-
-get '/assets/new' do
-  slim :new
-end
-
-get '/assets/:id' do
-  send_file Asset[params[:id]].path
-end
-
-post '/assets/' do
-  asset = Asset.create(params)
-  upload = asset.add_upload(name: params[:name], total: asset.size)
-  headers 'Location' => url("/uploads/#{upload.id}")
-  204
-end
-
-put '/uploads/:id' do
-  upload = Upload[params[:id]]
-  halt 400 unless content_range[:first].to_i == upload.position
-  
-  upload.write_range(request.body.read)
-  
-  if content_range[:last].to_i == upload.total
-    upload.destroy
-    headers 'Location' => "/assets/#{upload.asset.id}"
-    halt 204
-  end
-  
-  upload.update(position: content_range[:last].to_i + 1)
-  headers 'Range' => "1-#{upload.position}"
-  308
 end
 
 get '/js/:name.js' do
@@ -123,4 +56,45 @@ end
 
 get '/css/:name.css' do
   sass params[:name].intern
+end
+
+get '/new' do
+  slim :new
+end
+
+post '/' do
+  asset = Asset.create(
+    name: params[:file][:filename],
+    type: params[:file][:type],
+    description: params[:description]
+  )
+  FileUtils.mv(params[:file][:tempfile], asset.media) if params[:file][:tempfile]
+  
+  headers 'Location' => url("/#{asset.id}")
+  204
+end
+
+before %r{^/(?<id>\d+)/?.*} do
+  halt 404 unless @asset = Asset[params[:id]]
+end
+
+get '/:id/media' do
+  halt 200 unless File.exist?(@asset.media)
+
+  content_type @asset.type
+  send_file @asset.media, disposition: 'inline'
+end
+
+put '/:id/media' do
+  # halt 400 if rand <= 0.5
+  
+  halt 400 unless content_range[:first] == File.size?(@asset.media) ? File.size(@asset.media) : 0
+  
+  @asset.append(request.body.read)
+  headers 'Location' => url("/#{@asset.id}")
+  204
+end
+
+get '/:id' do
+  slim :show, locals: {asset: @asset}
 end
