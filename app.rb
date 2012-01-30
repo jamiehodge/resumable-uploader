@@ -1,106 +1,90 @@
+ENV['RACK_ENV'] ||= 'development'
+
 require 'bundler/setup'
-Bundler.require
+Bundler.require :default, ENV['RACK_ENV'].to_sym
 
-DB = Sequel.sqlite
+require_relative 'db'
+require_relative 'lib/lockable'
+require_relative 'lib/asset'
+require_relative 'lib/chunk'
 
-DB.create_table :assets do
-  primary_key :id
-  
-  String      :name
-  String      :type
-  
-  String      :description, text: true
-  
-  FalseClass  :complete
-end
-
-class Asset < Sequel::Model
-  
-  def after_create
-    FileUtils.rm media, force: true
-  end
-  
-  def media
-    File.join('media', id.to_s + File.extname(name))
-  end
-  
-  def append(data)
-    File.extend(Lockable).lock(media) do |f|
-      f.write data
-    end
-  end
-end
-
-module Lockable
-  def lock(filename, mode='a', &block)
-    File.open(filename, mode) do |f|
-      begin
-        f.flock File::LOCK_EX
-        yield f
-      ensure
-        f.flock File::LOCK_UN
-      end
-    end
-  end
-end
-
-helpers do
-  def content_range
-    range, total = env['HTTP_CONTENT_RANGE'].split.last.split('/')
-    first, last = range.split('-')
-    {first: first.to_i, last: last.to_i, total: total.to_i}
-  end
-end
-
-get '/js/:name.js' do
-  coffee params[:name].intern
-end
-
-get '/css/:name.css' do
-  sass params[:name].intern
+before %r{^/(\d+)} do
+  @asset = Asset[params[:captures].first] || not_found
 end
 
 get '/new' do
-  slim :new
+  respond_with :'assets/new'
 end
 
-post '/' do
-  asset = Asset.create(
-    name: params[:file][:filename],
-    type: params[:file][:type],
-    description: params[:description]
-  )
-  FileUtils.mv(params[:file][:tempfile], asset.media) if params[:file][:tempfile]
-  
-  headers 'Location' => url("/#{asset.id}")
-  204
+get '/:id/chunks/:number' do
+  chunk = Chunk[params[:id], params[:number]] || not_found
+  200
 end
 
-before %r{^/(?<id>\d+)/?.*} do
-  halt 404 unless @asset = Asset[params[:id]]
-end
-
+# to simplify linking
 get '/:id/media' do
-  halt 200 unless File.exist?(@asset.media)
-
   content_type @asset.type
-  send_file @asset.media, disposition: 'inline'
-end
-
-put '/:id/media' do
-  # halt 400 if rand <= 0.5
-  
-  halt 400 if @asset.complete || content_range[:first] != 
-    (File.exist?(@asset.media) ? File.size(@asset.media) : 0)
-  
-  @asset.append(request.body.read)
-  
-  @asset.update(complete: true) if content_range[:last] == content_range[:total]
-  
-  headers 'Location' => url("/#{@asset.id}")
-  204
+  send_file @asset.path
 end
 
 get '/:id' do
-  slim :show, locals: {asset: @asset}
+  respond_with :'assets/show', asset: @asset
 end
+
+get '/' do
+  respond_with :'assets/index', assets: Asset.all
+end
+
+post '/' do
+  file = params[:asset][:file]
+  
+  @asset = Asset.new(
+    name:     file[:filename],
+    type:     file[:type],
+    tempfile: file[:tempfile] ? file[:tempfile] : nil,
+    size:     file[:tempfile] ? file[:tempfile].size : file[:size]
+  )
+  @asset.save
+  
+  headers 'Location' => url("/#{@asset.id}")
+  respond_to do |f|
+    f.json { 201 }
+    f.html { redirect to "/#{@asset.id}" unless request.xhr? }
+  end
+end
+
+put '/:id/chunks/:number' do
+  data = request.body.read
+  
+  @chunk = Chunk.new(
+    asset_id:   params[:id],
+    number:     params[:number],
+    data:       data,
+    size:       data.size
+  )
+  @chunk.save
+  
+  headers 'Location' => url("/#{@chunk.asset_id}/chunks/#{@chunk.number}")
+  
+  respond_to do |f|
+    f.json { 201 }
+    f.html { redirect to "/#{@chunk.asset_id}/chunks/#{@chunk.number}" unless request.xhr? }
+  end
+end
+
+delete '/:id' do
+  @asset.destroy
+  
+  respond_to do |f|
+    f.json { 204 }
+    f.html { redirect to '/' }
+  end
+end
+
+error Sequel::ValidationFailed, Sequel::HookFailed do
+  respond_to do |f|
+    f.json { 422 }
+    f.html { redirect back }
+  end
+end
+

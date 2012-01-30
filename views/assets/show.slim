@@ -1,0 +1,22 @@
+article
+  header
+    h1 = asset.name
+  p
+    - if asset.complete
+      video src=url("#{asset.id}/media") controls=true
+    - else
+      form.resume action=url("/#{asset.id}") method='post' enctype='multipart/form-data'
+        p
+          input type='file' name='asset[file]'
+        p
+          input type='submit' value='Resume'
+  footer
+    p = asset.type
+    p = asset.size
+      
+  nav 
+    ul
+      li
+        a rel='delete' href==url("/#{asset.id}") data-method='delete' data-confirm='Are you sure?' Delete
+  
+  
